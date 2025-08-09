@@ -6,9 +6,11 @@ class PianoRoll {
         this.timeRulerCtx = this.timeRulerCanvas.getContext('2d');
         
         // Piano roll settings
-        this.noteHeight = 20;
+        this.baseNoteHeight = 20;
+        this.basePixelsPerBeat = 100;
+        this.noteHeight = this.baseNoteHeight;
         this.beatsPerBar = 4;
-        this.pixelsPerBeat = 100;
+        this.pixelsPerBeat = this.basePixelsPerBeat;
         this.snapToGrid = true;
         this.zoom = 1;
         
@@ -22,11 +24,17 @@ class PianoRoll {
         this.isSelecting = false;
         this.dragStart = { x: 0, y: 0 };
         this.selectionBox = null;
+        this.resizingNoteId = null;
+        this.resizeEdge = null; // 'left' | 'right'
         
         // Playback
         this.isPlaying = false;
         this.currentTime = 0;
         this.playhead = null;
+        this.audioCtx = null;
+        this.playbackStartTime = 0;
+        this.loopBeats = 64;
+        this.scheduledStartTokens = new Set();
         
         // Piano keys
         this.noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -46,14 +54,13 @@ class PianoRoll {
     
     setupCanvas() {
         // Set canvas size
-        this.canvas.width = 2000; // Wide canvas for horizontal scrolling
+        this.canvas.width = Math.max(4000, this.loopBeats * this.pixelsPerBeat); // Wide canvas
         this.canvas.height = this.totalNotes * this.noteHeight;
         
         this.timeRulerCanvas.width = this.canvas.width;
         this.timeRulerCanvas.height = 30;
         
-        // Enable high DPI
-        const dpr = window.devicePixelRatio || 1;
+        // Style sizes
         this.canvas.style.width = this.canvas.width + 'px';
         this.canvas.style.height = this.canvas.height + 'px';
         this.timeRulerCanvas.style.width = this.timeRulerCanvas.width + 'px';
@@ -74,13 +81,13 @@ class PianoRoll {
             keyElement.className = 'piano-key';
             keyElement.dataset.midiNote = midiNote;
             keyElement.textContent = noteName;
+            keyElement.style.height = this.noteHeight + 'px';
             
-            // Determine if it's a black or white key
             const isBlackKey = [1, 3, 6, 8, 10].includes(noteIndex);
             keyElement.classList.add(isBlackKey ? 'black' : 'white');
             
             keyElement.addEventListener('mousedown', (e) => {
-                this.playNote(midiNote);
+                this.playNote(midiNote, 0.2);
                 keyElement.classList.add('active');
             });
             
@@ -102,6 +109,15 @@ class PianoRoll {
         this.canvas.addEventListener('mousemove', this.onMouseMove.bind(this));
         this.canvas.addEventListener('mouseup', this.onMouseUp.bind(this));
         this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        
+        // Sync scroll of keys and time ruler with grid
+        const gridScroll = document.querySelector('.grid-area');
+        const keysPane = document.querySelector('.piano-keys');
+        const timeRulerCanvas = this.timeRulerCanvas;
+        gridScroll.addEventListener('scroll', () => {
+            keysPane.scrollTop = gridScroll.scrollTop;
+            timeRulerCanvas.style.transform = `translateX(${-gridScroll.scrollLeft}px)`;
+        });
         
         // Tool buttons
         document.getElementById('selectTool').addEventListener('click', () => this.setTool('select'));
@@ -130,8 +146,25 @@ class PianoRoll {
         
         this.dragStart = { x, y };
         
+        // Right click to erase
+        if (e.button === 2) {
+            this.deleteNoteAt(x, y);
+            this.draw();
+            return;
+        }
+        
         if (this.currentTool === 'pencil') {
-            this.addNote(x, y);
+            const hit = this.getNoteAt(x, y);
+            if (hit && this.isNearEdge(x, hit)) {
+                this.resizingNoteId = hit.id;
+                this.resizeEdge = this.nearestEdge(x, hit);
+                this.isDragging = true;
+            } else if (hit) {
+                this.selectedNotes = [hit];
+                this.isDragging = true;
+            } else {
+                this.addNote(x, y);
+            }
         } else if (this.currentTool === 'erase') {
             this.deleteNoteAt(x, y);
         } else if (this.currentTool === 'select') {
@@ -142,7 +175,13 @@ class PianoRoll {
                 } else {
                     this.toggleNoteSelection(note);
                 }
-                this.isDragging = true;
+                // Check resize
+                if (this.isNearEdge(x, note)) {
+                    this.resizingNoteId = note.id;
+                    this.resizeEdge = this.nearestEdge(x, note);
+                } else {
+                    this.isDragging = true;
+                }
             } else {
                 if (!e.shiftKey) {
                     this.selectedNotes = [];
@@ -160,15 +199,38 @@ class PianoRoll {
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
         
-        // Update mouse position display
         const beat = Math.floor(x / this.pixelsPerBeat);
         const noteIndex = Math.floor(y / this.noteHeight);
         const midiNote = this.lowestNote + (this.totalNotes - 1 - noteIndex);
         const noteName = this.getNoteNameFromMidi(midiNote);
-        
         document.getElementById('mousePosition').textContent = `Beat: ${beat}, Note: ${noteName}`;
         
-        if (this.isDragging && this.selectedNotes.length > 0) {
+        // Resize cursor feedback
+        const hoverNote = this.getNoteAt(x, y);
+        if (hoverNote && this.isNearEdge(x, hoverNote)) {
+            this.canvas.style.cursor = this.nearestEdge(x, hoverNote) === 'left' ? 'w-resize' : 'e-resize';
+        } else if (this.currentTool === 'pencil' || this.currentTool === 'erase') {
+            this.canvas.style.cursor = 'crosshair';
+        } else {
+            this.canvas.style.cursor = 'default';
+        }
+        
+        if (this.resizingNoteId) {
+            const note = this.notes.find(n => n.id === this.resizingNoteId);
+            if (note) {
+                const mouseBeat = x / this.pixelsPerBeat;
+                if (this.resizeEdge === 'right') {
+                    const newDuration = Math.max(0.1, mouseBeat - note.beat);
+                    note.duration = this.snapToGrid ? Math.max(0.25, Math.round(newDuration * 4) / 4) : newDuration;
+                } else {
+                    const newBeat = mouseBeat;
+                    const rightEdge = note.beat + note.duration;
+                    note.beat = this.snapToGrid ? Math.max(0, Math.round(newBeat * 4) / 4) : Math.max(0, newBeat);
+                    note.duration = Math.max(0.1, rightEdge - note.beat);
+                }
+                this.draw();
+            }
+        } else if (this.isDragging && this.selectedNotes.length > 0) {
             const deltaX = x - this.dragStart.x;
             const deltaY = y - this.dragStart.y;
             this.moveSelectedNotes(deltaX, deltaY);
@@ -183,31 +245,41 @@ class PianoRoll {
         if (this.isSelecting) {
             this.finishSelection();
         }
-        
         this.isDragging = false;
         this.isSelecting = false;
+        this.resizingNoteId = null;
+        this.resizeEdge = null;
         this.removeSelectionBox();
     }
     
+    isNearEdge(x, note) {
+        const noteX = note.beat * this.pixelsPerBeat;
+        const noteWidth = note.duration * this.pixelsPerBeat;
+        const edgeThreshold = 6;
+        return Math.abs(x - noteX) <= edgeThreshold || Math.abs(x - (noteX + noteWidth)) <= edgeThreshold;
+    }
+    
+    nearestEdge(x, note) {
+        const noteX = note.beat * this.pixelsPerBeat;
+        const noteWidth = note.duration * this.pixelsPerBeat;
+        return Math.abs(x - noteX) < Math.abs(x - (noteX + noteWidth)) ? 'left' : 'right';
+    }
+    
     addNote(x, y) {
-        const beat = this.snapToGrid ? Math.round(x / this.pixelsPerBeat) : x / this.pixelsPerBeat;
+        const beatFloat = x / this.pixelsPerBeat;
+        const beat = this.snapToGrid ? Math.round(beatFloat * 4) / 4 : beatFloat;
         const noteIndex = Math.floor(y / this.noteHeight);
         const midiNote = this.lowestNote + (this.totalNotes - 1 - noteIndex);
         
-        // Check if note already exists at this position
-        const existingNote = this.notes.find(n => 
-            Math.abs(n.beat - beat) < 0.1 && n.midiNote === midiNote
-        );
-        
+        const existingNote = this.notes.find(n => Math.abs(n.beat - beat) < 0.01 && n.midiNote === midiNote);
         if (!existingNote) {
             const note = {
                 id: Date.now() + Math.random(),
                 beat: beat,
-                duration: 1, // Default 1 beat duration
+                duration: 1,
                 midiNote: midiNote,
-                velocity: 127
+                velocity: 100
             };
-            
             this.notes.push(note);
             this.selectedNotes = [note];
         }
@@ -222,7 +294,6 @@ class PianoRoll {
     }
     
     getNoteAt(x, y) {
-        const beat = x / this.pixelsPerBeat;
         const noteIndex = Math.floor(y / this.noteHeight);
         const midiNote = this.lowestNote + (this.totalNotes - 1 - noteIndex);
         
@@ -230,9 +301,7 @@ class PianoRoll {
             const noteX = note.beat * this.pixelsPerBeat;
             const noteWidth = note.duration * this.pixelsPerBeat;
             const noteY = (this.totalNotes - 1 - (note.midiNote - this.lowestNote)) * this.noteHeight;
-            
-            return x >= noteX && x <= noteX + noteWidth && 
-                   y >= noteY && y <= noteY + this.noteHeight;
+            return x >= noteX && x <= noteX + noteWidth && y >= noteY && y <= noteY + this.noteHeight;
         });
     }
     
@@ -246,17 +315,14 @@ class PianoRoll {
     }
     
     moveSelectedNotes(deltaX, deltaY) {
-        const deltaBeat = deltaX / this.pixelsPerBeat;
-        const deltaNotes = Math.round(-deltaY / this.noteHeight);
+        const deltaBeatRaw = deltaX / this.pixelsPerBeat;
+        const deltaNotesRaw = -deltaY / this.noteHeight;
+        const deltaBeat = this.snapToGrid ? Math.round(deltaBeatRaw * 4) / 4 : deltaBeatRaw;
+        const deltaNotes = Math.round(deltaNotesRaw);
         
         this.selectedNotes.forEach(note => {
-            note.beat += deltaBeat;
-            note.midiNote += deltaNotes;
-            
-            // Clamp to valid ranges
-            note.beat = Math.max(0, note.beat);
-            note.midiNote = Math.max(this.lowestNote, 
-                Math.min(this.lowestNote + this.totalNotes - 1, note.midiNote));
+            note.beat = Math.max(0, note.beat + deltaBeat);
+            note.midiNote = Math.max(this.lowestNote, Math.min(this.lowestNote + this.totalNotes - 1, note.midiNote + deltaNotes));
         });
     }
     
@@ -283,9 +349,7 @@ class PianoRoll {
                 const noteX = note.beat * this.pixelsPerBeat;
                 const noteWidth = note.duration * this.pixelsPerBeat;
                 const noteY = (this.totalNotes - 1 - (note.midiNote - this.lowestNote)) * this.noteHeight;
-                
-                return noteX + noteWidth >= minX && noteX <= maxX &&
-                       noteY + this.noteHeight >= minY && noteY <= maxY;
+                return noteX + noteWidth >= minX && noteX <= maxX && noteY + this.noteHeight >= minY && noteY <= maxY;
             });
         }
     }
@@ -297,15 +361,9 @@ class PianoRoll {
     
     setTool(tool) {
         this.currentTool = tool;
-        
-        // Update UI
         document.querySelectorAll('.tool-btn').forEach(btn => btn.classList.remove('active'));
         document.getElementById(tool + 'Tool').classList.add('active');
-        
-        // Update cursor
-        if (tool === 'pencil') {
-            this.canvas.style.cursor = 'crosshair';
-        } else if (tool === 'erase') {
+        if (tool === 'pencil' || tool === 'erase') {
             this.canvas.style.cursor = 'crosshair';
         } else {
             this.canvas.style.cursor = 'default';
@@ -313,25 +371,30 @@ class PianoRoll {
     }
     
     adjustZoom(factor) {
+        const prevZoom = this.zoom;
         this.zoom *= factor;
         this.zoom = Math.max(0.25, Math.min(4, this.zoom));
         
-        // Update display
-        document.getElementById('zoomLevel').textContent = Math.round(this.zoom * 100) + '%';
+        this.pixelsPerBeat = this.basePixelsPerBeat * this.zoom;
+        this.noteHeight = this.baseNoteHeight * this.zoom;
         
-        // Redraw with new zoom
+        // Regenerate keys to match new note height
+        this.generatePianoKeys();
+        
+        // Resize canvases
+        this.setupCanvas();
+        
+        document.getElementById('zoomLevel').textContent = Math.round(this.zoom * 100) + '%';
         this.draw();
         this.drawTimeRuler();
     }
     
     draw() {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        
         this.drawGrid();
         this.drawNotes();
         this.drawSelectionBox();
         this.drawPlayhead();
-        
         this.updateInfoBar();
     }
     
@@ -339,15 +402,13 @@ class PianoRoll {
         this.ctx.strokeStyle = '#333333';
         this.ctx.lineWidth = 1;
         
-        // Horizontal lines (for each note)
+        // Horizontal lines
         for (let i = 0; i <= this.totalNotes; i++) {
             const y = i * this.noteHeight;
-            
-            // Highlight octave lines
             if (i > 0) {
                 const midiNote = this.lowestNote + (this.totalNotes - i);
                 const noteIndex = midiNote % 12;
-                if (noteIndex === 0) { // C notes
+                if (noteIndex === 0) {
                     this.ctx.strokeStyle = '#555555';
                     this.ctx.lineWidth = 1;
                 } else {
@@ -355,29 +416,23 @@ class PianoRoll {
                     this.ctx.lineWidth = 1;
                 }
             }
-            
             this.ctx.beginPath();
             this.ctx.moveTo(0, y);
             this.ctx.lineTo(this.canvas.width, y);
             this.ctx.stroke();
         }
         
-        // Vertical lines (for beats and bars)
+        // Vertical lines
         const totalBeats = Math.ceil(this.canvas.width / this.pixelsPerBeat);
-        
         for (let beat = 0; beat <= totalBeats; beat++) {
             const x = beat * this.pixelsPerBeat;
-            
             if (beat % this.beatsPerBar === 0) {
-                // Bar lines
                 this.ctx.strokeStyle = '#777777';
                 this.ctx.lineWidth = 2;
             } else {
-                // Beat lines
                 this.ctx.strokeStyle = '#555555';
                 this.ctx.lineWidth = 1;
             }
-            
             this.ctx.beginPath();
             this.ctx.moveTo(x, 0);
             this.ctx.lineTo(x, this.canvas.height);
@@ -391,8 +446,6 @@ class PianoRoll {
             const y = (this.totalNotes - 1 - (note.midiNote - this.lowestNote)) * this.noteHeight;
             const width = note.duration * this.pixelsPerBeat;
             const height = this.noteHeight - 1;
-            
-            // Note background
             const isSelected = this.selectedNotes.some(n => n.id === note.id);
             
             if (isSelected) {
@@ -404,17 +457,21 @@ class PianoRoll {
                 this.ctx.strokeStyle = '#ff8c00';
                 this.ctx.lineWidth = 1;
             }
-            
-            // Draw note rectangle
             this.ctx.fillRect(x, y, width, height);
             this.ctx.strokeRect(x, y, width, height);
             
-            // Draw note name if wide enough
+            // Edge handles
+            this.ctx.fillStyle = '#ffffff';
+            this.ctx.globalAlpha = 0.8;
+            this.ctx.fillRect(x - 2, y + 2, 4, height - 4);
+            this.ctx.fillRect(x + width - 2, y + 2, 4, height - 4);
+            this.ctx.globalAlpha = 1;
+            
             if (width > 40) {
                 this.ctx.fillStyle = '#ffffff';
                 this.ctx.font = '10px Segoe UI';
                 this.ctx.textAlign = 'left';
-                this.ctx.fillText(this.getNoteNameFromMidi(note.midiNote), x + 4, y + 14);
+                this.ctx.fillText(this.getNoteNameFromMidi(note.midiNote), x + 4, y + Math.min(14, height - 4));
             }
         });
     }
@@ -425,15 +482,12 @@ class PianoRoll {
             const y = Math.min(this.selectionBox.startY, this.selectionBox.endY);
             const width = Math.abs(this.selectionBox.endX - this.selectionBox.startX);
             const height = Math.abs(this.selectionBox.endY - this.selectionBox.startY);
-            
             this.ctx.strokeStyle = '#ffffff';
             this.ctx.setLineDash([5, 5]);
             this.ctx.lineWidth = 1;
             this.ctx.strokeRect(x, y, width, height);
-            
             this.ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
             this.ctx.fillRect(x, y, width, height);
-            
             this.ctx.setLineDash([]);
         }
     }
@@ -452,21 +506,15 @@ class PianoRoll {
     
     drawTimeRuler() {
         this.timeRulerCtx.clearRect(0, 0, this.timeRulerCanvas.width, this.timeRulerCanvas.height);
-        
         this.timeRulerCtx.fillStyle = '#cccccc';
         this.timeRulerCtx.font = '11px Segoe UI';
         this.timeRulerCtx.textAlign = 'left';
-        
         const totalBeats = Math.ceil(this.timeRulerCanvas.width / this.pixelsPerBeat);
-        
         for (let beat = 0; beat <= totalBeats; beat++) {
             const x = beat * this.pixelsPerBeat;
-            
             if (beat % this.beatsPerBar === 0) {
                 const bar = Math.floor(beat / this.beatsPerBar) + 1;
                 this.timeRulerCtx.fillText(bar.toString(), x + 2, 20);
-                
-                // Draw tick mark
                 this.timeRulerCtx.strokeStyle = '#777777';
                 this.timeRulerCtx.lineWidth = 1;
                 this.timeRulerCtx.beginPath();
@@ -474,7 +522,6 @@ class PianoRoll {
                 this.timeRulerCtx.lineTo(x, 30);
                 this.timeRulerCtx.stroke();
             } else {
-                // Smaller tick for beats
                 this.timeRulerCtx.strokeStyle = '#555555';
                 this.timeRulerCtx.lineWidth = 1;
                 this.timeRulerCtx.beginPath();
@@ -492,14 +539,12 @@ class PianoRoll {
     }
     
     updateInfoBar() {
-        document.getElementById('selectedNotes').textContent = 
-            `${this.selectedNotes.length} notes selected`;
+        document.getElementById('selectedNotes').textContent = `${this.selectedNotes.length} notes selected`;
     }
     
     togglePlayback() {
         this.isPlaying = !this.isPlaying;
         const playBtn = document.getElementById('playBtn');
-        
         if (this.isPlaying) {
             playBtn.textContent = '⏸️';
             this.startPlayback();
@@ -509,41 +554,85 @@ class PianoRoll {
         }
     }
     
+    ensureAudio() {
+        if (!this.audioCtx) {
+            this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        return this.audioCtx;
+    }
+    
     startPlayback() {
-        // Simple playback simulation
-        this.playbackInterval = setInterval(() => {
-            this.currentTime += 0.05; // Advance time
+        const ctx = this.ensureAudio();
+        const bpm = 120;
+        const secondsPerBeat = 60 / bpm;
+        this.playbackStartTime = ctx.currentTime - (this.currentTime * secondsPerBeat);
+        
+        // Schedule simple beeps per note (very basic synth)
+        const scheduleWindow = 0.25; // seconds ahead
+        const schedule = () => {
+            if (!this.isPlaying) return;
+            const now = ctx.currentTime;
+            const playheadBeats = (now - this.playbackStartTime) / secondsPerBeat * 1; // 1 beat per beat
+            this.currentTime = playheadBeats; // in beats
             this.draw();
             
-            // Update time display
-            const minutes = Math.floor(this.currentTime / 60);
-            const seconds = Math.floor(this.currentTime % 60);
-            document.getElementById('currentTime').textContent = 
-                `${minutes}:${seconds.toString().padStart(2, '0')}`;
-        }, 50);
+            const horizon = now + scheduleWindow;
+            
+            this.notes.forEach(note => {
+                const startTime = this.playbackStartTime + note.beat * secondsPerBeat;
+                const endTime = startTime + note.duration * secondsPerBeat;
+                const token = `${note.id}@${note.beat}`;
+                if (startTime >= now && startTime < horizon && !this.scheduledStartTokens.has(token)) {
+                    this.scheduledStartTokens.add(token);
+                    this.triggerTone(note.midiNote, startTime, Math.min(0.5, endTime - startTime));
+                }
+            });
+            
+            // Time label
+            const minutes = Math.floor((playheadBeats * secondsPerBeat) / 60);
+            const seconds = Math.floor((playheadBeats * secondsPerBeat) % 60);
+            document.getElementById('currentTime').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            
+            this.playbackRaf = requestAnimationFrame(schedule);
+        };
+        this.playbackRaf = requestAnimationFrame(schedule);
     }
     
     stopPlayback() {
-        if (this.playbackInterval) {
-            clearInterval(this.playbackInterval);
-            this.playbackInterval = null;
+        if (this.playbackRaf) {
+            cancelAnimationFrame(this.playbackRaf);
+            this.playbackRaf = null;
         }
+        this.scheduledStartTokens.clear();
     }
     
     stop() {
         this.isPlaying = false;
         this.currentTime = 0;
         this.stopPlayback();
-        
         document.getElementById('playBtn').textContent = '▶️';
         document.getElementById('currentTime').textContent = '0:00';
-        
         this.draw();
     }
     
-    playNote(midiNote) {
-        // Note playback would be implemented with Web Audio API
-        console.log('Playing note:', this.getNoteNameFromMidi(midiNote));
+    playNote(midiNote, durationSec = 0.2) {
+        const ctx = this.ensureAudio();
+        const now = ctx.currentTime;
+        this.triggerTone(midiNote, now, durationSec);
+    }
+    
+    triggerTone(midiNote, when, durationSec) {
+        const ctx = this.ensureAudio();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = 440 * Math.pow(2, (midiNote - 69) / 12);
+        gain.gain.setValueAtTime(0.0001, when);
+        gain.gain.exponentialRampToValueAtTime(0.2, when + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, when + durationSec);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(when);
+        osc.stop(when + durationSec + 0.05);
     }
     
     onKeyDown(e) {
