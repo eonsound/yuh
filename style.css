@@ -74,7 +74,12 @@ body {
     width: 120px;
     background-color: #252526;
     border-right: 1px solid #404040;
-    overflow: hidden;
+    overflow: auto;
+    scrollbar-width: none; /* Firefox */
+}
+.piano-keys::-webkit-scrollbar { /* Chrome/Safari */
+    width: 0;
+    height: 0;
 }
 
 #pianoKeysContainer {
@@ -119,7 +124,7 @@ body {
     display: flex;
     flex-direction: column;
     background-color: #1e1e1e;
-    overflow: auto;
+    overflow: hidden;
 }
 
 /* Time ruler */
@@ -133,6 +138,7 @@ body {
 #timeRulerCanvas {
     display: block;
     background-color: #2d2d30;
+    will-change: transform;
 }
 
 /* Grid area */
