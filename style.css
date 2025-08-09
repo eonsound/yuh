@@ -1,0 +1,258 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #1e1e1e;
+    color: #ffffff;
+    overflow: hidden;
+}
+
+.piano-roll-container {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background-color: #2d2d30;
+}
+
+/* Toolbar styling */
+.toolbar {
+    height: 40px;
+    background: linear-gradient(to bottom, #3c3c3c, #2d2d30);
+    border-bottom: 1px solid #404040;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    gap: 20px;
+}
+
+.playback-controls, .tools, .zoom-controls {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+.control-btn, .tool-btn {
+    background: linear-gradient(to bottom, #484848, #3a3a3a);
+    border: 1px solid #555;
+    color: #ffffff;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    border-radius: 3px;
+    transition: all 0.2s;
+}
+
+.control-btn:hover, .tool-btn:hover {
+    background: linear-gradient(to bottom, #5a5a5a, #4c4c4c);
+    border-color: #666;
+}
+
+.tool-btn.active {
+    background: linear-gradient(to bottom, #007acc, #005a9e);
+    border-color: #007acc;
+}
+
+#zoomLevel {
+    font-size: 11px;
+    color: #cccccc;
+    margin-left: 5px;
+}
+
+/* Main piano roll area */
+.piano-roll-main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+/* Piano keys sidebar */
+.piano-keys {
+    width: 120px;
+    background-color: #252526;
+    border-right: 1px solid #404040;
+    overflow: hidden;
+}
+
+#pianoKeysContainer {
+    height: 100%;
+}
+
+.piano-key {
+    height: 20px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    font-size: 11px;
+    border-bottom: 1px solid #404040;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.1s;
+}
+
+.piano-key.white {
+    background-color: #f0f0f0;
+    color: #000000;
+}
+
+.piano-key.black {
+    background-color: #2d2d30;
+    color: #ffffff;
+}
+
+.piano-key:hover {
+    background-color: #007acc !important;
+    color: #ffffff !important;
+}
+
+.piano-key.active {
+    background-color: #ff6b35 !important;
+    color: #ffffff !important;
+}
+
+/* Grid container */
+.grid-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background-color: #1e1e1e;
+    overflow: auto;
+}
+
+/* Time ruler */
+.time-ruler {
+    height: 30px;
+    background-color: #2d2d30;
+    border-bottom: 1px solid #404040;
+    overflow: hidden;
+}
+
+#timeRulerCanvas {
+    display: block;
+    background-color: #2d2d30;
+}
+
+/* Grid area */
+.grid-area {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+}
+
+#pianoRollCanvas {
+    display: block;
+    cursor: crosshair;
+    background-color: #1e1e1e;
+}
+
+/* Note styling */
+.note {
+    position: absolute;
+    background: linear-gradient(to bottom, #ff6b35, #e55528);
+    border: 1px solid #ff8c00;
+    border-radius: 2px;
+    cursor: move;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: #ffffff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+.note.selected {
+    border-color: #ffffff;
+    box-shadow: 0 0 5px rgba(255, 255, 255, 0.5);
+}
+
+.note:hover {
+    background: linear-gradient(to bottom, #ff7b45, #f55538);
+    border-color: #ffa500;
+}
+
+/* Info bar */
+.info-bar {
+    height: 25px;
+    background: linear-gradient(to bottom, #3c3c3c, #2d2d30);
+    border-top: 1px solid #404040;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    gap: 20px;
+    font-size: 11px;
+    color: #cccccc;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #555555;
+    border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #666666;
+}
+
+::-webkit-scrollbar-corner {
+    background: #1e1e1e;
+}
+
+/* Grid lines */
+.grid-line-vertical {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: #333333;
+    pointer-events: none;
+}
+
+.grid-line-horizontal {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background-color: #333333;
+    pointer-events: none;
+}
+
+.grid-line-beat {
+    background-color: #555555 !important;
+}
+
+.grid-line-bar {
+    background-color: #777777 !important;
+}
+
+/* Playhead */
+.playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background-color: #00ff00;
+    pointer-events: none;
+    z-index: 1000;
+}
+
+/* Selection box */
+.selection-box {
+    position: absolute;
+    border: 1px dashed #ffffff;
+    background-color: rgba(255, 255, 255, 0.1);
+    pointer-events: none;
+    z-index: 999;
+}

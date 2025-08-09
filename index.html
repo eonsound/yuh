@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Piano Roll - FL Studio Style</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="piano-roll-container">
+        <!-- Top toolbar -->
+        <div class="toolbar">
+            <div class="playback-controls">
+                <button id="playBtn" class="control-btn">▶️</button>
+                <button id="stopBtn" class="control-btn">⏹️</button>
+                <button id="recordBtn" class="control-btn">🔴</button>
+            </div>
+            <div class="tools">
+                <button id="selectTool" class="tool-btn active">Select</button>
+                <button id="pencilTool" class="tool-btn">Pencil</button>
+                <button id="eraseTool" class="tool-btn">Erase</button>
+            </div>
+            <div class="zoom-controls">
+                <button id="zoomIn" class="control-btn">+</button>
+                <button id="zoomOut" class="control-btn">-</button>
+                <span id="zoomLevel">100%</span>
+            </div>
+        </div>
+
+        <!-- Main piano roll area -->
+        <div class="piano-roll-main">
+            <!-- Piano keys sidebar -->
+            <div class="piano-keys">
+                <div id="pianoKeysContainer"></div>
+            </div>
+
+            <!-- Scrollable grid area -->
+            <div class="grid-container">
+                <!-- Time ruler -->
+                <div class="time-ruler">
+                    <canvas id="timeRulerCanvas"></canvas>
+                </div>
+                
+                <!-- Main grid -->
+                <div class="grid-area">
+                    <canvas id="pianoRollCanvas"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom info bar -->
+        <div class="info-bar">
+            <span id="currentTime">0:00</span>
+            <span id="selectedNotes">0 notes selected</span>
+            <span id="mousePosition"></span>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
